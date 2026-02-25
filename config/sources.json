@@ -1,0 +1,31 @@
+{
+  "sources": [
+    {
+      "name": "Hacker News RSS - data engineer interview",
+      "type": "rss",
+      "url": "https://hnrss.org/newest?q=%22data+engineer+interview%22",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["interview", "data-engineering"]
+    },
+    {
+      "name": "Medium tag feed - data engineering interview",
+      "type": "rss",
+      "url": "https://medium.com/feed/tag/data-engineering-interview",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["interview", "blog"]
+    },
+    {
+      "name": "Interview prep article page",
+      "type": "html",
+      "url": "https://www.interviewquery.com/p/data-engineer-interview-questions",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["question-bank", "data-engineering"]
+    }
+  ]
+}
