@@ -1,0 +1,63 @@
+name: Deploy Interview Prep Site (GitHub Pages)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 11 * * *"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "github-pages"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Build interview bank JSON
+        run: |
+          python3 scripts/build_knowledge_bank.py \
+            --config config/sources.json \
+            --output knowledge_bank/interview_bank.json \
+            --window 2y \
+            --max-items-per-source 50 \
+            --max-questions-per-source 60 \
+            --timeout 20
+
+      - name: Export static bundle
+        run: |
+          python3 scripts/export_static_site.py \
+            --web-dir web \
+            --bank knowledge_bank/interview_bank.json \
+            --output-dir site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

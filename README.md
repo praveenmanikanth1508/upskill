@@ -43,6 +43,31 @@ What this gives you:
 
 ---
 
+### 0.1) Free hosting on GitHub Pages (static mode)
+
+You can host the UI for free on GitHub Pages.
+
+This repo now includes:
+
+- `.github/workflows/deploy_pages.yml` (build + deploy workflow)
+- `scripts/export_static_site.py` (packages `web/` + bank JSON into `site/`)
+
+How to enable:
+
+1. Go to **Settings -> Pages**.
+2. Set source to **GitHub Actions**.
+3. Run workflow **Deploy Interview Prep Site (GitHub Pages)** once manually.
+4. After deploy, open the Pages URL from workflow output.
+
+Notes for Pages mode:
+
+- Runs as **static mode** (no Python backend on Pages).
+- UI filtering/search still works client-side.
+- "Run Load + Sync DB" buttons are disabled in static mode.
+- Fresh data is published by scheduled workflow runs.
+
+---
+
 ### 1) First load (latest 2 years by default)
 
 ```bash
@@ -103,11 +128,14 @@ knowledge_bank/
 scripts/
   build_knowledge_bank.py      # Ingestion + extraction pipeline
   query_knowledge_bank.py      # CLI search on generated bank
+  export_static_site.py        # Package static site for GitHub Pages
   web_app.py                   # Backend API + SQLite integration + static server
 web/
   index.html                   # UI
   app.js                       # UI logic (load/filter/render)
   styles.css                   # UI styles
+.github/workflows/
+  deploy_pages.yml             # Scheduled GitHub Pages deployment
 ```
 
 ---

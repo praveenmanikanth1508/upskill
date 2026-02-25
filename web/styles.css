@@ -36,6 +36,12 @@ body {
   color: var(--muted);
 }
 
+.mode-note {
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+  color: #bfdbfe;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -109,6 +115,12 @@ button.ghost {
 
 button:hover {
   filter: brightness(1.05);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: none;
 }
 
 .status {

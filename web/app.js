@@ -1,4 +1,5 @@
 const els = {
+  modeNote: document.getElementById("app-mode-note"),
   loadMode: document.getElementById("load-mode"),
   loadWindow: document.getElementById("load-window"),
   loadPartition: document.getElementById("load-partition"),
@@ -16,6 +17,11 @@ const els = {
   items: document.getElementById("items"),
 };
 
+const appState = {
+  mode: "api",
+  staticBank: null,
+};
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -26,9 +32,13 @@ function escapeHtml(value) {
 }
 
 async function apiFetch(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (options.body) {
+    headers["Content-Type"] = "application/json";
+  }
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers,
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -109,45 +119,206 @@ function renderItems(items, total) {
     .join("");
 }
 
+function setSelectOptions(selectEl, rows) {
+  selectEl.innerHTML =
+    `<option value="all">all</option>` +
+    rows
+      .map((entry) => `<option value="${escapeHtml(entry.value)}">${escapeHtml(entry.value)} (${entry.count})</option>`)
+      .join("");
+}
+
+function sortItemsByRecency(items) {
+  const valueFor = (item) =>
+    String(item?.source?.published_at || item?.collected_at || "");
+  return [...items].sort((left, right) => valueFor(right).localeCompare(valueFor(left)));
+}
+
+function filterStaticItems(items) {
+  const company = (els.company.value || "all").toLowerCase();
+  const tag = (els.tag.value || "all").toLowerCase();
+  const keyword = (els.keyword.value || "").trim().toLowerCase();
+  const limit = Number.parseInt(els.limit.value || "25", 10);
+
+  const filtered = sortItemsByRecency(items).filter((item) => {
+    if (company !== "all" && (item.company || "").toLowerCase() !== company) {
+      return false;
+    }
+    if (tag !== "all") {
+      const tags = Array.isArray(item.tags) ? item.tags.map((v) => String(v).toLowerCase()) : [];
+      if (!tags.includes(tag)) {
+        return false;
+      }
+    }
+    if (keyword) {
+      const haystack = `${item.question || ""} ${item.answer_hint || ""}`.toLowerCase();
+      if (!haystack.includes(keyword)) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  return {
+    total: filtered.length,
+    items: filtered.slice(0, Number.isNaN(limit) ? 25 : limit),
+  };
+}
+
+function buildStaticFilters(items) {
+  const companyCounts = new Map();
+  const tagCounts = new Map();
+
+  for (const item of items) {
+    const company = String(item.company || "unknown").toLowerCase();
+    companyCounts.set(company, (companyCounts.get(company) || 0) + 1);
+
+    const tags = Array.isArray(item.tags) ? item.tags : [];
+    for (const rawTag of tags) {
+      const tag = String(rawTag || "").trim().toLowerCase();
+      if (!tag) continue;
+      tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+    }
+  }
+
+  const companies = [...companyCounts.entries()]
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => (b.count - a.count) || a.value.localeCompare(b.value));
+  const tags = [...tagCounts.entries()]
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => (b.count - a.count) || a.value.localeCompare(b.value))
+    .slice(0, 50);
+
+  return { companies, tags };
+}
+
+function computeStaticStats(bank) {
+  const items = Array.isArray(bank.items) ? bank.items : [];
+  const metadata = bank.metadata || {};
+  const companies = new Set(items.map((item) => String(item.company || "unknown").toLowerCase()));
+  const latestCollectedAt = items
+    .map((item) => item.collected_at)
+    .filter(Boolean)
+    .sort()
+    .at(-1) || null;
+  const latestPublishedAt = items
+    .map((item) => item?.source?.published_at)
+    .filter(Boolean)
+    .sort()
+    .at(-1) || null;
+
+  return {
+    total_items: items.length,
+    distinct_companies: companies.size,
+    latest_collected_at: latestCollectedAt,
+    latest_published_at: latestPublishedAt,
+    last_run: {
+      mode: `static-data (${metadata.load_mode || "unknown"})`,
+      window: metadata.window || (metadata.days_back ? `${metadata.days_back}d` : "n/a"),
+    },
+  };
+}
+
+async function detectMode() {
+  try {
+    await apiFetch("/api/health");
+    appState.mode = "api";
+  } catch (_error) {
+    appState.mode = "static";
+  }
+}
+
+function applyModeUI() {
+  if (appState.mode === "api") {
+    if (els.modeNote) {
+      els.modeNote.textContent = "Mode: API backend connected. You can run load jobs from this UI.";
+    }
+    return;
+  }
+
+  if (els.modeNote) {
+    els.modeNote.textContent =
+      "Mode: GitHub Pages static mode. Backend load/sync is unavailable here; filters run client-side on published JSON.";
+  }
+  els.runLoadBtn.disabled = true;
+  els.syncBtn.disabled = true;
+  els.runLoadBtn.title = "Disabled in static mode";
+  els.syncBtn.title = "Disabled in static mode";
+}
+
+async function ensureStaticBankLoaded() {
+  if (appState.staticBank) {
+    return appState.staticBank;
+  }
+  const bankUrl = new URL("./data/interview_bank.json", window.location.href).toString();
+  const response = await fetch(bankUrl, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error("Could not load static data bundle (data/interview_bank.json).");
+  }
+  const payload = await response.json();
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Static bank payload is invalid.");
+  }
+  appState.staticBank = payload;
+  return payload;
+}
+
 async function loadFilters() {
-  const payload = await apiFetch("/api/filters");
-  const companies = payload.companies || [];
-  const tags = payload.tags || [];
+  if (appState.mode === "api") {
+    const payload = await apiFetch("/api/filters");
+    setSelectOptions(els.company, payload.companies || []);
+    setSelectOptions(els.tag, payload.tags || []);
+    return;
+  }
 
-  els.company.innerHTML = `<option value="all">all</option>` +
-    companies
-      .map((entry) => `<option value="${escapeHtml(entry.value)}">${escapeHtml(entry.value)} (${entry.count})</option>`)
-      .join("");
-
-  els.tag.innerHTML = `<option value="all">all</option>` +
-    tags
-      .map((entry) => `<option value="${escapeHtml(entry.value)}">${escapeHtml(entry.value)} (${entry.count})</option>`)
-      .join("");
+  const bank = await ensureStaticBankLoaded();
+  const items = Array.isArray(bank.items) ? bank.items : [];
+  const filters = buildStaticFilters(items);
+  setSelectOptions(els.company, filters.companies);
+  setSelectOptions(els.tag, filters.tags);
 }
 
 async function loadItems() {
-  const query = new URLSearchParams();
-  if (els.company.value && els.company.value !== "all") {
-    query.set("company", els.company.value);
-  }
-  if (els.tag.value && els.tag.value !== "all") {
-    query.set("tag", els.tag.value);
-  }
-  if (els.keyword.value.trim()) {
-    query.set("keyword", els.keyword.value.trim());
-  }
-  query.set("limit", els.limit.value || "25");
+  if (appState.mode === "api") {
+    const query = new URLSearchParams();
+    if (els.company.value && els.company.value !== "all") {
+      query.set("company", els.company.value);
+    }
+    if (els.tag.value && els.tag.value !== "all") {
+      query.set("tag", els.tag.value);
+    }
+    if (els.keyword.value.trim()) {
+      query.set("keyword", els.keyword.value.trim());
+    }
+    query.set("limit", els.limit.value || "25");
 
-  const payload = await apiFetch(`/api/items?${query.toString()}`);
-  renderItems(payload.items || [], payload.total ?? 0);
+    const payload = await apiFetch(`/api/items?${query.toString()}`);
+    renderItems(payload.items || [], payload.total ?? 0);
+    return;
+  }
+
+  const bank = await ensureStaticBankLoaded();
+  const items = Array.isArray(bank.items) ? bank.items : [];
+  const filtered = filterStaticItems(items);
+  renderItems(filtered.items, filtered.total);
 }
 
 async function loadStats() {
-  const payload = await apiFetch("/api/stats");
-  renderStats(payload);
+  if (appState.mode === "api") {
+    const payload = await apiFetch("/api/stats");
+    renderStats(payload);
+    return;
+  }
+
+  const bank = await ensureStaticBankLoaded();
+  renderStats(computeStaticStats(bank));
 }
 
 async function runLoad() {
+  if (appState.mode !== "api") {
+    setStatus("Load unavailable in static mode. Use GitHub Action or local backend.", true);
+    return;
+  }
+
   setStatus("Running backend load, this may take a while...");
   const body = {
     mode: els.loadMode.value,
@@ -175,6 +346,11 @@ async function runLoad() {
 }
 
 async function runSyncOnly() {
+  if (appState.mode !== "api") {
+    setStatus("Sync unavailable in static mode.", true);
+    return;
+  }
+
   setStatus("Syncing existing JSON into SQLite...");
   try {
     const payload = await apiFetch("/api/sync", { method: "POST" });
@@ -198,6 +374,8 @@ function resetFilters() {
 
 async function init() {
   try {
+    await detectMode();
+    applyModeUI();
     await Promise.all([loadFilters(), loadStats()]);
     await loadItems();
     setStatus("Ready.");
