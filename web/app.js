@@ -22,13 +22,15 @@ const appState = {
   staticBank: null,
 };
 
+let keywordDebounceTimer = null;
+
 function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 async function apiFetch(path, options = {}) {
@@ -63,8 +65,8 @@ function formatDate(iso) {
 function renderStats(stats) {
   const lastRun = stats.last_run || {};
   const cards = [
-    { label: "Total Items", value: stats.total_items ?? 0 },
-    { label: "Companies", value: stats.distinct_companies ?? 0 },
+    { label: "Total Items", value: stats.total_items == null ? 0 : stats.total_items },
+    { label: "Companies", value: stats.distinct_companies == null ? 0 : stats.distinct_companies },
     { label: "Latest Collected", value: formatDate(stats.latest_collected_at) },
     { label: "Latest Published", value: formatDate(stats.latest_published_at) },
     { label: "Last Run Mode", value: lastRun.mode || "n/a" },
@@ -119,6 +121,20 @@ function renderItems(items, total) {
     .join("");
 }
 
+function getSourcePublished(item) {
+  if (!item || !item.source) {
+    return "";
+  }
+  return item.source.published_at || "";
+}
+
+function lastValue(values) {
+  if (!values.length) {
+    return null;
+  }
+  return values[values.length - 1];
+}
+
 function setSelectOptions(selectEl, rows) {
   selectEl.innerHTML =
     `<option value="all">all</option>` +
@@ -129,7 +145,7 @@ function setSelectOptions(selectEl, rows) {
 
 function sortItemsByRecency(items) {
   const valueFor = (item) =>
-    String(item?.source?.published_at || item?.collected_at || "");
+    String(getSourcePublished(item) || item.collected_at || "");
   return [...items].sort((left, right) => valueFor(right).localeCompare(valueFor(left)));
 }
 
@@ -198,19 +214,17 @@ function computeStaticStats(bank) {
   const latestCollectedAt = items
     .map((item) => item.collected_at)
     .filter(Boolean)
-    .sort()
-    .at(-1) || null;
+    .sort();
   const latestPublishedAt = items
-    .map((item) => item?.source?.published_at)
+    .map((item) => getSourcePublished(item))
     .filter(Boolean)
-    .sort()
-    .at(-1) || null;
+    .sort();
 
   return {
     total_items: items.length,
     distinct_companies: companies.size,
-    latest_collected_at: latestCollectedAt,
-    latest_published_at: latestPublishedAt,
+    latest_collected_at: lastValue(latestCollectedAt),
+    latest_published_at: lastValue(latestPublishedAt),
     last_run: {
       mode: `static-data (${metadata.load_mode || "unknown"})`,
       window: metadata.window || (metadata.days_back ? `${metadata.days_back}d` : "n/a"),
@@ -232,6 +246,11 @@ function applyModeUI() {
     if (els.modeNote) {
       els.modeNote.textContent = "Mode: API backend connected. You can run load jobs from this UI.";
     }
+    els.runLoadBtn.disabled = false;
+    els.syncBtn.disabled = false;
+    els.loadMode.disabled = false;
+    els.loadWindow.disabled = false;
+    els.loadPartition.disabled = false;
     return;
   }
 
@@ -241,6 +260,9 @@ function applyModeUI() {
   }
   els.runLoadBtn.disabled = true;
   els.syncBtn.disabled = true;
+  els.loadMode.disabled = true;
+  els.loadWindow.disabled = true;
+  els.loadPartition.disabled = true;
   els.runLoadBtn.title = "Disabled in static mode";
   els.syncBtn.title = "Disabled in static mode";
 }
@@ -406,17 +428,44 @@ async function init() {
     applyModeUI();
     await Promise.all([loadFilters(), loadStats()]);
     await loadItems();
-    setStatus("Ready.");
+    if (appState.mode === "static") {
+      setStatus("Static mode ready. Use filters and click Apply (or type keyword). Backend load actions are disabled on Pages.");
+    } else {
+      setStatus("Ready.");
+    }
   } catch (error) {
     setStatus(`Initialization failed: ${error.message}`, true);
   }
 }
 
+function applyFiltersWithStatus() {
+  loadItems().catch((error) => setStatus(error.message, true));
+}
+
 els.runLoadBtn.addEventListener("click", () => runLoad());
 els.syncBtn.addEventListener("click", () => runSyncOnly());
-els.applyFiltersBtn.addEventListener("click", () => {
-  loadItems().catch((error) => setStatus(error.message, true));
-});
+els.applyFiltersBtn.addEventListener("click", applyFiltersWithStatus);
 els.resetFiltersBtn.addEventListener("click", resetFilters);
+els.company.addEventListener("change", applyFiltersWithStatus);
+els.tag.addEventListener("change", applyFiltersWithStatus);
+els.limit.addEventListener("change", applyFiltersWithStatus);
+els.keyword.addEventListener("input", () => {
+  if (keywordDebounceTimer) {
+    window.clearTimeout(keywordDebounceTimer);
+  }
+  keywordDebounceTimer = window.setTimeout(() => {
+    applyFiltersWithStatus();
+  }, 220);
+});
+els.keyword.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    if (keywordDebounceTimer) {
+      window.clearTimeout(keywordDebounceTimer);
+      keywordDebounceTimer = null;
+    }
+    applyFiltersWithStatus();
+  }
+});
 
 init();
