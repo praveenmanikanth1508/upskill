@@ -1,0 +1,23 @@
+{
+  "id": "replace-with-stable-id",
+  "question": "How would you handle late-arriving events in a daily and hourly pipeline?",
+  "answer_hint": "Talk about watermarking, replay strategy, idempotent writes, and backfill strategy.",
+  "company": "company-name",
+  "region": "usa",
+  "role_level": "mid-level",
+  "tags": [
+    "mid-level",
+    "streaming",
+    "etl",
+    "usa"
+  ],
+  "source": {
+    "source_name": "manual",
+    "source_type": "manual",
+    "source_url": "https://original-source-url-if-any",
+    "entry_title": "Interview experience notes",
+    "entry_url": "https://original-source-url-if-any",
+    "published_at": null
+  },
+  "collected_at": "2026-02-25T00:00:00+00:00"
+}

@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+
+# Generated output from local runs
+knowledge_bank/interview_bank.json

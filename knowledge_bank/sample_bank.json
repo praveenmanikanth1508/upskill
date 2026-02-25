@@ -1,0 +1,66 @@
+{
+  "metadata": {
+    "generated_at": "2026-02-25T00:00:00+00:00",
+    "source_count": 2,
+    "item_count": 2,
+    "companies": {
+      "uber": 1,
+      "multiple": 1
+    },
+    "top_tags": {
+      "mid-level": 2,
+      "usa": 2,
+      "sql": 1,
+      "spark": 1,
+      "system-design": 1
+    }
+  },
+  "items": [
+    {
+      "id": "ab12cd34ef56aa11",
+      "question": "How would you design a batch + streaming pipeline for near-real-time metrics?",
+      "answer_hint": "Structure answer as requirements, architecture, data model, scale bottlenecks, and failure handling.",
+      "company": "uber",
+      "region": "usa",
+      "role_level": "mid-level",
+      "tags": [
+        "mid-level",
+        "spark",
+        "streaming",
+        "system-design",
+        "usa"
+      ],
+      "source": {
+        "source_name": "Community interview write-up",
+        "source_type": "html",
+        "source_url": "https://example.com/uber-data-engineer-interview",
+        "entry_title": "Uber Data Engineer Interview",
+        "entry_url": "https://example.com/uber-data-engineer-interview",
+        "published_at": "2026-01-30T00:00:00+00:00"
+      },
+      "collected_at": "2026-02-25T00:00:00+00:00"
+    },
+    {
+      "id": "bb22cd34ef56aa99",
+      "question": "Write SQL to find monthly active users with first and last activity dates.",
+      "answer_hint": "Explain table assumptions first, then walk through SQL step-by-step and discuss performance trade-offs.",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "tags": [
+        "mid-level",
+        "sql",
+        "usa"
+      ],
+      "source": {
+        "source_name": "Question bank feed",
+        "source_type": "rss",
+        "source_url": "https://example.com/feed",
+        "entry_title": "SQL interview prep",
+        "entry_url": "https://example.com/sql-question",
+        "published_at": "2026-02-01T00:00:00+00:00"
+      },
+      "collected_at": "2026-02-25T00:00:00+00:00"
+    }
+  ]
+}
