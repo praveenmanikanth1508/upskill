@@ -249,17 +249,45 @@ async function ensureStaticBankLoaded() {
   if (appState.staticBank) {
     return appState.staticBank;
   }
-  const bankUrl = new URL("./data/interview_bank.json", window.location.href).toString();
-  const response = await fetch(bankUrl, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error("Could not load static data bundle (data/interview_bank.json).");
+
+  const origin = window.location.origin;
+  const pathname = window.location.pathname;
+  const segments = pathname.split("/").filter(Boolean);
+  const candidates = new Set();
+
+  // Handles normal paths like /upskill/ and /upskill/index.html.
+  candidates.add(new URL("./data/interview_bank.json", window.location.href).toString());
+  candidates.add(new URL("data/interview_bank.json", window.location.href).toString());
+
+  // Handles GitHub Pages project URLs opened as /repo (without trailing slash).
+  if (window.location.hostname.endsWith(".github.io") && segments.length >= 1) {
+    candidates.add(`${origin}/${segments[0]}/data/interview_bank.json`);
   }
-  const payload = await response.json();
-  if (!payload || typeof payload !== "object") {
-    throw new Error("Static bank payload is invalid.");
+
+  // Root fallback (mostly for user/organization Pages sites).
+  candidates.add(`${origin}/data/interview_bank.json`);
+
+  const errors = [];
+  for (const url of candidates) {
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) {
+        errors.push(`${url} -> HTTP ${response.status}`);
+        continue;
+      }
+      const payload = await response.json();
+      if (!payload || typeof payload !== "object") {
+        errors.push(`${url} -> invalid JSON object`);
+        continue;
+      }
+      appState.staticBank = payload;
+      return payload;
+    } catch (error) {
+      errors.push(`${url} -> ${error.message}`);
+    }
   }
-  appState.staticBank = payload;
-  return payload;
+
+  throw new Error(`Could not load static data bundle. Tried: ${errors.join(" | ")}`);
 }
 
 async function loadFilters() {
