@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Data Engineering Interview Prep Hub</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="hero">
+        <h1>Data Engineering Interview Prep Hub</h1>
+        <p>
+          Mid-level (3-6 years) interview prep assistant with loader controls,
+          SQLite-backed search, and source traceability.
+        </p>
+        <p id="app-mode-note" class="mode-note">Detecting mode...</p>
+      </header>
+
+      <section class="panel">
+        <h2>Run Backend Load</h2>
+        <div class="grid three">
+          <label>
+            Mode
+            <select id="load-mode">
+              <option value="incremental" selected>incremental</option>
+              <option value="full">full</option>
+            </select>
+          </label>
+          <label>
+            Window
+            <select id="load-window">
+              <option value="1w">1w (weekly)</option>
+              <option value="1m">1m (monthly)</option>
+              <option value="6m" selected>6m</option>
+              <option value="2y">2y</option>
+            </select>
+          </label>
+          <label>
+            Incremental Partition
+            <select id="load-partition">
+              <option value="company" selected>company</option>
+              <option value="global">global</option>
+            </select>
+          </label>
+        </div>
+        <div class="actions">
+          <button id="run-load-btn">Run Load + Sync DB</button>
+          <button id="sync-btn" class="ghost">Sync Existing JSON to DB</button>
+        </div>
+        <pre id="load-status" class="status">Ready.</pre>
+      </section>
+
+      <section class="panel">
+        <h2>Filters</h2>
+        <div class="grid four">
+          <label>
+            Company
+            <select id="filter-company">
+              <option value="all">all</option>
+            </select>
+          </label>
+          <label>
+            Tag
+            <select id="filter-tag">
+              <option value="all">all</option>
+            </select>
+          </label>
+          <label>
+            Keyword
+            <input id="filter-keyword" type="text" placeholder="e.g. airflow, scd, partition" />
+          </label>
+          <label>
+            Limit
+            <select id="filter-limit">
+              <option value="10">10</option>
+              <option value="25" selected>25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+        </div>
+        <div class="actions">
+          <button id="apply-filters-btn">Apply Filters</button>
+          <button id="reset-filters-btn" class="ghost">Reset</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Stats</h2>
+        <div id="stats" class="stats-grid"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Interview Questions</h2>
+        <p id="result-count" class="subtle">Loading...</p>
+        <div id="items" class="item-list"></div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
