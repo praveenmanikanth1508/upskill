@@ -29,22 +29,9 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
-      - name: Build interview bank JSON
+      - name: Refresh static site bundle
         run: |
-          python3 scripts/build_knowledge_bank.py \
-            --config config/sources.json \
-            --output knowledge_bank/interview_bank.json \
-            --window 2y \
-            --max-items-per-source 50 \
-            --max-questions-per-source 60 \
-            --timeout 20
-
-      - name: Export static bundle
-        run: |
-          python3 scripts/export_static_site.py \
-            --web-dir web \
-            --bank knowledge_bank/interview_bank.json \
-            --output-dir site
+          bash scripts/refresh_static_site.sh 2y 50 60
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

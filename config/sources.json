@@ -10,6 +10,42 @@
       "base_tags": ["interview", "data-engineering"]
     },
     {
+      "name": "Hacker News RSS - data engineering interview",
+      "type": "rss",
+      "url": "https://hnrss.org/newest?q=%22data+engineering+interview%22",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["interview", "data-engineering"]
+    },
+    {
+      "name": "Hacker News RSS - sql interview question",
+      "type": "rss",
+      "url": "https://hnrss.org/newest?q=%22sql+interview+question%22",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["interview", "sql"]
+    },
+    {
+      "name": "Hacker News RSS - spark interview question",
+      "type": "rss",
+      "url": "https://hnrss.org/newest?q=%22spark+interview+question%22",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["interview", "spark"]
+    },
+    {
+      "name": "Hacker News RSS - airflow interview question",
+      "type": "rss",
+      "url": "https://hnrss.org/newest?q=%22airflow+interview+question%22",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["interview", "airflow"]
+    },
+    {
       "name": "Medium tag feed - data engineering interview",
       "type": "rss",
       "url": "https://medium.com/feed/tag/data-engineering-interview",
@@ -19,13 +55,139 @@
       "base_tags": ["interview", "blog"]
     },
     {
-      "name": "Interview prep article page",
+      "name": "Medium tag feed - data engineering",
+      "type": "rss",
+      "url": "https://medium.com/feed/tag/data-engineering",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["blog", "data-engineering"]
+    },
+    {
+      "name": "Medium tag feed - data modeling",
+      "type": "rss",
+      "url": "https://medium.com/feed/tag/data-modeling",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["blog", "data-modeling"]
+    },
+    {
+      "name": "Medium tag feed - airflow",
+      "type": "rss",
+      "url": "https://medium.com/feed/tag/airflow",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["blog", "airflow"]
+    },
+    {
+      "name": "Medium tag feed - etl",
+      "type": "rss",
+      "url": "https://medium.com/feed/tag/etl",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["blog", "etl"]
+    },
+    {
+      "name": "Interview Query - Data Engineer Interview Questions",
       "type": "html",
       "url": "https://www.interviewquery.com/p/data-engineer-interview-questions",
       "company": "multiple",
       "region": "usa",
       "role_level": "mid-level",
       "base_tags": ["question-bank", "data-engineering"]
+    },
+    {
+      "name": "GeeksforGeeks - Data Engineer Interview Questions",
+      "type": "html",
+      "url": "https://www.geeksforgeeks.org/data-engineer-interview-questions-and-answers/",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["question-bank", "data-engineering"]
+    },
+    {
+      "name": "GeeksforGeeks - SQL Interview Questions",
+      "type": "html",
+      "url": "https://www.geeksforgeeks.org/sql-interview-questions/",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["question-bank", "sql"]
+    },
+    {
+      "name": "Towards Data Science - Data Engineering tag",
+      "type": "html",
+      "url": "https://towardsdatascience.com/tagged/data-engineering",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["blog", "data-engineering"]
+    },
+    {
+      "name": "Start Data Engineering - posts",
+      "type": "html",
+      "url": "https://www.startdataengineering.com/post/",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["blog", "data-engineering", "pipeline"]
+    },
+    {
+      "name": "Databricks Engineering Blog",
+      "type": "html",
+      "url": "https://www.databricks.com/blog",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["blog", "spark", "system-design"]
+    },
+    {
+      "name": "Astronomer Blog",
+      "type": "html",
+      "url": "https://www.astronomer.io/blog/",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["blog", "airflow", "orchestration"]
+    },
+    {
+      "name": "Airbyte Blog",
+      "type": "html",
+      "url": "https://airbyte.com/blog",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["blog", "etl", "ingestion"]
+    },
+    {
+      "name": "dbt Labs Blog",
+      "type": "html",
+      "url": "https://docs.getdbt.com/blog",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["blog", "dbt", "data-modeling"]
+    },
+    {
+      "name": "Confluent Blog",
+      "type": "html",
+      "url": "https://www.confluent.io/blog/",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["blog", "streaming", "kafka"]
+    },
+    {
+      "name": "Google Cloud Data Analytics Blog",
+      "type": "html",
+      "url": "https://cloud.google.com/blog/products/data-analytics",
+      "company": "multiple",
+      "region": "usa",
+      "role_level": "mid-level",
+      "base_tags": ["blog", "warehousing", "bigquery"]
     }
   ]
 }
