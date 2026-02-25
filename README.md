@@ -25,6 +25,19 @@ This project helps you:
 
 ## Quick start
 
+### 0) Easiest path (static mode, no backend required)
+
+```bash
+bash scripts/refresh_static_site.sh 6m 50 60
+```
+
+This does both:
+
+1. Rebuild `knowledge_bank/interview_bank.json`
+2. Export static bundle into `site/` for GitHub Pages
+
+---
+
 ### 1) First load (latest 2 years by default)
 
 ```bash
@@ -60,6 +73,8 @@ Notes:
 - In incremental mode, old items are merged with newly fetched items, then deduplicated.
 - `--incremental-partition company` tracks checkpoints per company key (for example: `company:uber`).
 - `--window` (or `--days-back`) still acts as a safety cap.
+- Some community sites (for example Reddit RSS) may block automated fetches in certain environments.
+  If a source is blocked, keep it as manual notes via `knowledge_bank/manual_entry_template.json`.
 
 ### 3) Query by company/topic/keyword
 
@@ -140,6 +155,7 @@ scripts/
   query_knowledge_bank.py      # CLI search on generated bank
   web_app.py                   # Backend API + SQLite + local UI server
   export_static_site.py        # Static bundle export for GitHub Pages
+  refresh_static_site.sh       # One-command static refresh
 web/
   index.html                   # UI shell
   app.js                       # UI behavior
