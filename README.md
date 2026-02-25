@@ -72,6 +72,30 @@ python3 scripts/query_knowledge_bank.py \
   --limit 20
 ```
 
+### 4) Run backend server (API + UI + SQLite)
+
+```bash
+python3 scripts/web_app.py --host 127.0.0.1 --port 8080 --bootstrap-sync
+```
+
+Open: `http://127.0.0.1:8080`
+
+Phase 2 backend API additions:
+
+- `POST /api/load/async` -> async load jobs
+- `GET /api/jobs` and `GET /api/jobs/{job_id}` -> job tracking
+- `GET /api/runs` -> load history
+- `GET /api/scheduler` -> scheduler state
+- `POST /api/scheduler/start` / `POST /api/scheduler/stop` -> timed incremental runs
+
+Example: start timed scheduler (every 6 hours)
+
+```bash
+curl -s -X POST "http://127.0.0.1:8080/api/scheduler/start" \
+  -H "Content-Type: application/json" \
+  -d '{"interval_minutes":360,"mode":"incremental","window":"6m","incremental_partition":"company"}'
+```
+
 ---
 
 ## Project structure
@@ -85,6 +109,12 @@ knowledge_bank/
 scripts/
   build_knowledge_bank.py      # Ingestion + extraction pipeline
   query_knowledge_bank.py      # CLI search on generated bank
+  web_app.py                   # Backend API + SQLite + local UI server
+  export_static_site.py        # Static bundle export for GitHub Pages
+web/
+  index.html                   # UI shell
+  app.js                       # UI behavior
+  styles.css                   # UI styling
 ```
 
 ---
