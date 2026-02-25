@@ -62,6 +62,13 @@ TOPIC_PATTERNS: dict[str, tuple[str, ...]] = {
     "behavioral": (r"\bconflict\b", r"\bmistake\b", r"\bownership\b", r"\bdeadline\b"),
 }
 
+WINDOW_MULTIPLIERS = {
+    "d": 1,
+    "w": 7,
+    "m": 30,
+    "y": 365,
+}
+
 
 class VisibleTextExtractor(HTMLParser):
     """Collect visible text from selected HTML tags."""
@@ -426,25 +433,69 @@ def write_state(path: Path, state: dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def parse_window_to_days(window: str) -> int:
+    raw = normalize_text(window).lower()
+    matched = re.fullmatch(r"(\d+)\s*([dwmy])", raw)
+    if not matched:
+        raise ValueError(
+            "Invalid --window value. Use patterns like 7d, 1w, 1m, 6m, 1y, 2y."
+        )
+    amount = int(matched.group(1))
+    unit = matched.group(2)
+    if amount <= 0:
+        raise ValueError("--window must be greater than zero.")
+    return amount * WINDOW_MULTIPLIERS[unit]
+
+
+def resolve_effective_days_back(days_back: int, window: str | None) -> int:
+    if window:
+        return parse_window_to_days(window)
+    return days_back
+
+
+def partition_key_for_source(source: dict[str, Any], mode: str) -> str:
+    if mode == "company":
+        company = normalize_text(str(source.get("company", "multiple")).lower())
+        return f"company:{company or 'multiple'}"
+    return "global"
+
+
+def last_run_for_partition(state: dict[str, Any], partition_key: str) -> datetime | None:
+    partitions = state.get("partitions", {})
+    if isinstance(partitions, dict):
+        partition = partitions.get(partition_key, {})
+        if isinstance(partition, dict):
+            value = partition.get("last_successful_run")
+            if value:
+                parsed = parse_dt(str(value))
+                if parsed:
+                    return parsed
+
+    fallback = state.get("last_successful_run")
+    if fallback:
+        return parse_dt(str(fallback))
+    return None
+
+
 def resolve_cutoff(
     now_utc: datetime,
     days_back: int,
     incremental: bool,
     state: dict[str, Any],
+    partition_key: str = "global",
 ) -> tuple[datetime, str]:
     default_cutoff = now_utc - timedelta(days=days_back)
     if not incremental:
         return default_cutoff, "days_back_window"
 
-    last_run_raw = state.get("last_successful_run")
-    last_run = parse_dt(str(last_run_raw)) if last_run_raw else None
+    last_run = last_run_for_partition(state, partition_key=partition_key)
     if not last_run:
         return default_cutoff, "incremental_no_state_fallback"
 
     cutoff = max(default_cutoff, last_run)
     if cutoff == last_run:
-        return cutoff, "incremental_since_last_successful_run"
-    return cutoff, "incremental_capped_by_days_back"
+        return cutoff, "incremental_since_partition_last_successful_run"
+    return cutoff, "incremental_partition_capped_by_days_back"
 
 
 def deduplicate(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -468,6 +519,9 @@ def metadata_for(
     load_mode: str,
     cutoff: datetime,
     cutoff_reason: str,
+    days_back: int,
+    window: str | None,
+    incremental_partition: str,
 ) -> dict[str, Any]:
     company_counts = Counter(item.get("company", "unknown") for item in items)
     tag_counts = Counter(tag for item in items for tag in item.get("tags", []))
@@ -477,6 +531,9 @@ def metadata_for(
         "load_mode": load_mode,
         "cutoff_utc": cutoff.isoformat(),
         "cutoff_reason": cutoff_reason,
+        "days_back": days_back,
+        "window": window,
+        "incremental_partition": incremental_partition,
         "source_count": source_count,
         "item_count": len(items),
         "companies": dict(company_counts.most_common()),
@@ -499,9 +556,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Look-back window in days (default 730 = 2 years).",
     )
     parser.add_argument(
+        "--window",
+        default=None,
+        help="Window preset (overrides --days-back): e.g. 1w, 1m, 6m, 1y, 2y.",
+    )
+    parser.add_argument(
         "--incremental",
         action="store_true",
         help="Incremental mode: fetch items since last successful run (state-based).",
+    )
+    parser.add_argument(
+        "--incremental-partition",
+        choices=["global", "company"],
+        default="company",
+        help="State partition key for incremental mode (default: company).",
     )
     parser.add_argument(
         "--state-file",
@@ -541,6 +609,11 @@ def main(argv: list[str]) -> int:
     config_path = Path(args.config)
     output_path = Path(args.output)
     state_path = Path(args.state_file)
+    try:
+        effective_days_back = resolve_effective_days_back(args.days_back, args.window)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     if not config_path.exists():
         print(f"Config file not found: {config_path}", file=sys.stderr)
@@ -554,18 +627,25 @@ def main(argv: list[str]) -> int:
 
     now_utc = datetime.now(timezone.utc)
     state = load_state(state_path) if args.incremental else {}
+    global_partition = "global"
     cutoff, cutoff_reason = resolve_cutoff(
         now_utc=now_utc,
-        days_back=args.days_back,
+        days_back=effective_days_back,
         incremental=args.incremental,
         state=state,
+        partition_key=global_partition,
     )
     load_mode = "incremental" if args.incremental else "full"
     all_items: list[dict[str, Any]] = []
+    partition_updates: dict[str, dict[str, int]] = {}
 
     if args.verbose:
         print(
             f"[info] mode={load_mode} cutoff={cutoff.isoformat()} reason={cutoff_reason}",
+            file=sys.stderr,
+        )
+        print(
+            f"[info] window={args.window or f'{effective_days_back}d'} days_back={effective_days_back} partition={args.incremental_partition}",
             file=sys.stderr,
         )
 
@@ -573,6 +653,14 @@ def main(argv: list[str]) -> int:
         source_name = source.get("name", source.get("url", "unknown-source"))
         source_type = str(source.get("type", "rss")).lower()
         source_url = source.get("url", "")
+        source_partition = partition_key_for_source(source, mode=args.incremental_partition)
+        source_cutoff, source_cutoff_reason = resolve_cutoff(
+            now_utc=now_utc,
+            days_back=effective_days_back,
+            incremental=args.incremental,
+            state=state,
+            partition_key=source_partition,
+        )
         if not source_url:
             if args.verbose:
                 print(f"[skip] {source_name}: missing url", file=sys.stderr)
@@ -585,7 +673,7 @@ def main(argv: list[str]) -> int:
                     source=source,
                     xml_text=body,
                     now_utc=now_utc,
-                    cutoff=cutoff,
+                    cutoff=source_cutoff,
                     max_items_per_source=args.max_items_per_source,
                     max_questions_per_entry=args.max_questions_per_entry,
                 )
@@ -601,8 +689,14 @@ def main(argv: list[str]) -> int:
                 continue
 
             all_items.extend(source_items)
+            current = partition_updates.get(source_partition, {"source_count": 0, "new_items": 0})
+            current["source_count"] += 1
+            current["new_items"] += len(source_items)
+            partition_updates[source_partition] = current
             if args.verbose:
-                print(f"[ok] {source_name}: extracted {len(source_items)} items")
+                print(
+                    f"[ok] {source_name}: extracted {len(source_items)} items (partition={source_partition}, cutoff_reason={source_cutoff_reason})"
+                )
         except (HTTPError, URLError, TimeoutError, ValueError) as exc:
             print(f"[warn] {source_name}: failed to fetch/parse ({exc})", file=sys.stderr)
 
@@ -627,12 +721,27 @@ def main(argv: list[str]) -> int:
             load_mode=load_mode,
             cutoff=cutoff,
             cutoff_reason=cutoff_reason,
+            days_back=effective_days_back,
+            window=args.window,
+            incremental_partition=args.incremental_partition,
         ),
         "items": deduped_items,
     }
     write_output(output_path, payload)
 
     if not args.no_state_update:
+        partitions_state = {}
+        existing_partitions = state.get("partitions", {}) if isinstance(state, dict) else {}
+        if isinstance(existing_partitions, dict):
+            partitions_state.update(existing_partitions)
+
+        for key, stats in partition_updates.items():
+            partitions_state[key] = {
+                "last_successful_run": now_utc.isoformat(),
+                "last_source_count": stats["source_count"],
+                "last_new_items": stats["new_items"],
+            }
+
         write_state(
             state_path,
             {
@@ -641,6 +750,10 @@ def main(argv: list[str]) -> int:
                 "last_output_path": str(output_path),
                 "last_item_count": len(deduped_items),
                 "last_sources_count": len(sources),
+                "last_days_back": effective_days_back,
+                "last_window": args.window,
+                "last_incremental_partition": args.incremental_partition,
+                "partitions": partitions_state,
             },
         )
         if args.verbose:

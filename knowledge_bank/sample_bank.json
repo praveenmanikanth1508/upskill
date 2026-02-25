@@ -4,6 +4,9 @@
     "load_mode": "full",
     "cutoff_utc": "2024-02-26T00:00:00+00:00",
     "cutoff_reason": "days_back_window",
+    "days_back": 730,
+    "window": "2y",
+    "incremental_partition": "company",
     "source_count": 2,
     "item_count": 2,
     "companies": {

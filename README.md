@@ -31,9 +31,16 @@ This project helps you:
 python3 scripts/build_knowledge_bank.py \
   --config config/sources.json \
   --output knowledge_bank/interview_bank.json \
-  --days-back 730 \
+  --window 2y \
   --max-items-per-source 50
 ```
+
+Other window presets:
+
+- `--window 1w` (weekly)
+- `--window 1m` (monthly)
+- `--window 6m`
+- `--window 2y`
 
 ### 2) Incremental load (new items since last run)
 
@@ -42,7 +49,8 @@ python3 scripts/build_knowledge_bank.py \
   --config config/sources.json \
   --output knowledge_bank/interview_bank.json \
   --incremental \
-  --days-back 730 \
+  --window 6m \
+  --incremental-partition company \
   --max-items-per-source 50
 ```
 
@@ -50,7 +58,8 @@ Notes:
 
 - `--incremental` uses `knowledge_bank/.build_state.json` to remember the last successful run.
 - In incremental mode, old items are merged with newly fetched items, then deduplicated.
-- `--days-back` still acts as a safety cap.
+- `--incremental-partition company` tracks checkpoints per company key (for example: `company:uber`).
+- `--window` (or `--days-back`) still acts as a safety cap.
 
 ### 3) Query by company/topic/keyword
 
@@ -111,7 +120,7 @@ The loader supports both styles:
 Example daily cron (UTC 06:00):
 
 ```bash
-0 6 * * * cd /path/to/repo && python3 scripts/build_knowledge_bank.py --config config/sources.json --output knowledge_bank/interview_bank.json --incremental --days-back 730 >> knowledge_bank/build.log 2>&1
+0 6 * * * cd /path/to/repo && python3 scripts/build_knowledge_bank.py --config config/sources.json --output knowledge_bank/interview_bank.json --incremental --window 6m --incremental-partition company >> knowledge_bank/build.log 2>&1
 ```
 
 ---
