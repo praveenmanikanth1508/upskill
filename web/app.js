@@ -1,5 +1,9 @@
 const els = {
   modeNote: document.getElementById("app-mode-note"),
+  apiBaseUrl: document.getElementById("api-base-url"),
+  apiConnectionStatus: document.getElementById("api-connection-status"),
+  connectApiBtn: document.getElementById("connect-api-btn"),
+  clearApiBtn: document.getElementById("clear-api-btn"),
   loadMode: document.getElementById("load-mode"),
   loadWindow: document.getElementById("load-window"),
   loadPartition: document.getElementById("load-partition"),
@@ -20,9 +24,66 @@ const els = {
 const appState = {
   mode: "api",
   staticBank: null,
+  apiBase: "",
+  activeJobId: null,
 };
 
 let keywordDebounceTimer = null;
+const API_BASE_STORAGE_KEY = "deInterviewApiBase";
+const JOB_POLL_INTERVAL_MS = 2000;
+const JOB_POLL_TIMEOUT_MS = 12 * 60 * 1000;
+
+function storageGet(key) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function storageSet(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (_error) {
+    // no-op for environments where localStorage is blocked
+  }
+}
+
+function storageRemove(key) {
+  try {
+    window.localStorage.removeItem(key);
+  } catch (_error) {
+    // no-op
+  }
+}
+
+function normalizeApiBase(rawValue) {
+  const raw = String(rawValue || "").trim();
+  if (!raw) {
+    return "";
+  }
+  try {
+    const parsed = new URL(raw);
+    const basePath = (parsed.pathname || "").replace(/\/+$/, "");
+    return `${parsed.origin}${basePath}`;
+  } catch (_error) {
+    return "";
+  }
+}
+
+function resolveInitialApiBase() {
+  const query = new URLSearchParams(window.location.search);
+  const fromQuery = normalizeApiBase(query.get("api") || "");
+  if (fromQuery) {
+    storageSet(API_BASE_STORAGE_KEY, fromQuery);
+    return fromQuery;
+  }
+
+  const fromStorage = normalizeApiBase(storageGet(API_BASE_STORAGE_KEY) || "");
+  return fromStorage;
+}
+
+appState.apiBase = resolveInitialApiBase();
 
 function escapeHtml(value) {
   return String(value == null ? "" : value)
@@ -33,12 +94,19 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+function buildApiUrl(path) {
+  if (!appState.apiBase) {
+    return path;
+  }
+  return `${appState.apiBase}${path}`;
+}
+
 async function apiFetch(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (options.body) {
     headers["Content-Type"] = "application/json";
   }
-  const response = await fetch(path, {
+  const response = await fetch(buildApiUrl(path), {
     ...options,
     headers,
   });
@@ -53,6 +121,18 @@ async function apiFetch(path, options = {}) {
 function setStatus(message, isError = false) {
   els.loadStatus.textContent = message;
   els.loadStatus.classList.toggle("error", Boolean(isError));
+}
+
+function setConnectionStatus(text) {
+  if (els.apiConnectionStatus) {
+    els.apiConnectionStatus.value = text;
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function formatDate(iso) {
@@ -244,19 +324,26 @@ async function detectMode() {
 function applyModeUI() {
   if (appState.mode === "api") {
     if (els.modeNote) {
-      els.modeNote.textContent = "Mode: API backend connected. You can run load jobs from this UI.";
+      const originInfo = appState.apiBase || "same-origin";
+      els.modeNote.textContent = `Mode: API backend connected (${originInfo}). You can run load jobs from this UI.`;
     }
     els.runLoadBtn.disabled = false;
     els.syncBtn.disabled = false;
     els.loadMode.disabled = false;
     els.loadWindow.disabled = false;
     els.loadPartition.disabled = false;
+    setConnectionStatus(`Connected (${appState.apiBase || "same-origin"})`);
     return;
   }
 
   if (els.modeNote) {
-    els.modeNote.textContent =
-      "Mode: GitHub Pages static mode. Backend load/sync is unavailable here; filters run client-side on published JSON.";
+    if (appState.apiBase) {
+      els.modeNote.textContent =
+        "Mode: static fallback. Backend API URL did not respond; using published JSON locally.";
+    } else {
+      els.modeNote.textContent =
+        "Mode: GitHub Pages static mode. Backend load/sync is unavailable here; filters run client-side on published JSON.";
+    }
   }
   els.runLoadBtn.disabled = true;
   els.syncBtn.disabled = true;
@@ -265,6 +352,7 @@ function applyModeUI() {
   els.loadPartition.disabled = true;
   els.runLoadBtn.title = "Disabled in static mode";
   els.syncBtn.title = "Disabled in static mode";
+  setConnectionStatus(appState.apiBase ? `Not connected (${appState.apiBase})` : "Static mode (no API)");
 }
 
 async function ensureStaticBankLoaded() {
@@ -342,7 +430,7 @@ async function loadItems() {
     query.set("limit", els.limit.value || "25");
 
     const payload = await apiFetch(`/api/items?${query.toString()}`);
-    renderItems(payload.items || [], payload.total ?? 0);
+    renderItems(payload.items || [], payload.total == null ? 0 : payload.total);
     return;
   }
 
@@ -363,6 +451,24 @@ async function loadStats() {
   renderStats(computeStaticStats(bank));
 }
 
+async function pollLoadJob(jobId) {
+  const startedAt = Date.now();
+  while (true) {
+    const job = await apiFetch(`/api/jobs/${encodeURIComponent(jobId)}`);
+    const status = String(job.status || "");
+    if (status === "queued" || status === "running") {
+      const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+      setStatus(`Load job ${jobId} is ${status}... (${elapsedSeconds}s elapsed)`);
+      if (Date.now() - startedAt > JOB_POLL_TIMEOUT_MS) {
+        throw new Error(`Load job ${jobId} timed out after ${Math.floor(JOB_POLL_TIMEOUT_MS / 1000)}s`);
+      }
+      await sleep(JOB_POLL_INTERVAL_MS);
+      continue;
+    }
+    return job;
+  }
+}
+
 async function runLoad() {
   if (appState.mode !== "api") {
     setStatus("Load unavailable in static mode. Use GitHub Action or local backend.", true);
@@ -376,17 +482,32 @@ async function runLoad() {
     incremental_partition: els.loadPartition.value,
   };
   try {
-    const payload = await apiFetch("/api/load", {
+    const payload = await apiFetch("/api/load/async", {
       method: "POST",
       body: JSON.stringify(body),
     });
-    const load = payload.load_result || {};
-    const sync = payload.sync_result || {};
+    const jobId = payload.job_id;
+    if (!jobId) {
+      throw new Error("No job_id returned from backend.");
+    }
+    appState.activeJobId = jobId;
+    setStatus(`Load job submitted: ${jobId}. Waiting for completion...`);
+
+    const job = await pollLoadJob(jobId);
+    if (job.status !== "succeeded") {
+      const errorMessage = job.error || "Unknown job failure.";
+      const stderr = job.load_result && job.load_result.stderr ? `\n${job.load_result.stderr}` : "";
+      setStatus(`Load job failed: ${errorMessage}${stderr}`, true);
+      return;
+    }
+
+    const load = job.load_result || {};
+    const sync = job.sync_result || {};
     setStatus(
       [
-        payload.message || "Load completed.",
+        `Load job ${jobId} completed.`,
         `Return code: ${load.return_code}`,
-        `Synced items: ${sync.item_count ?? 0} (inserted=${sync.inserted_count ?? 0}, updated=${sync.updated_count ?? 0})`,
+        `Synced items: ${sync.item_count == null ? 0 : sync.item_count} (inserted=${sync.inserted_count == null ? 0 : sync.inserted_count}, updated=${sync.updated_count == null ? 0 : sync.updated_count})`,
       ].join("\n")
     );
     await Promise.all([loadFilters(), loadStats(), loadItems()]);
@@ -406,7 +527,7 @@ async function runSyncOnly() {
     const payload = await apiFetch("/api/sync", { method: "POST" });
     const sync = payload.sync_result || {};
     setStatus(
-      `Sync complete. items=${sync.item_count ?? 0}, inserted=${sync.inserted_count ?? 0}, updated=${sync.updated_count ?? 0}`
+      `Sync complete. items=${sync.item_count == null ? 0 : sync.item_count}, inserted=${sync.inserted_count == null ? 0 : sync.inserted_count}, updated=${sync.updated_count == null ? 0 : sync.updated_count}`
     );
     await Promise.all([loadFilters(), loadStats(), loadItems()]);
   } catch (error) {
@@ -422,14 +543,18 @@ function resetFilters() {
   loadItems().catch((error) => setStatus(error.message, true));
 }
 
-async function init() {
+async function refreshAppData() {
   try {
     await detectMode();
     applyModeUI();
     await Promise.all([loadFilters(), loadStats()]);
     await loadItems();
     if (appState.mode === "static") {
-      setStatus("Static mode ready. Use filters and click Apply (or type keyword). Backend load actions are disabled on Pages.");
+      if (appState.apiBase) {
+        setStatus("Backend URL unreachable, running in static fallback mode with published JSON.", true);
+      } else {
+        setStatus("Static mode ready. Use filters and click Apply (or type keyword). Backend load actions are disabled on Pages.");
+      }
     } else {
       setStatus("Ready.");
     }
@@ -438,14 +563,68 @@ async function init() {
   }
 }
 
+function setApiBaseInputValue() {
+  if (els.apiBaseUrl) {
+    els.apiBaseUrl.value = appState.apiBase;
+  }
+}
+
+async function connectApiBase() {
+  if (!els.apiBaseUrl) {
+    return;
+  }
+  const normalized = normalizeApiBase(els.apiBaseUrl.value);
+  if (!normalized) {
+    setStatus("Please enter a valid API base URL (example: https://my-backend.onrender.com).", true);
+    return;
+  }
+
+  appState.apiBase = normalized;
+  storageSet(API_BASE_STORAGE_KEY, normalized);
+  appState.staticBank = null;
+  setApiBaseInputValue();
+  await refreshAppData();
+}
+
+async function clearApiBase() {
+  appState.apiBase = "";
+  storageRemove(API_BASE_STORAGE_KEY);
+  appState.staticBank = null;
+  setApiBaseInputValue();
+  await refreshAppData();
+}
+
 function applyFiltersWithStatus() {
   loadItems().catch((error) => setStatus(error.message, true));
+}
+
+async function init() {
+  setApiBaseInputValue();
+  await refreshAppData();
 }
 
 els.runLoadBtn.addEventListener("click", () => runLoad());
 els.syncBtn.addEventListener("click", () => runSyncOnly());
 els.applyFiltersBtn.addEventListener("click", applyFiltersWithStatus);
 els.resetFiltersBtn.addEventListener("click", resetFilters);
+if (els.connectApiBtn) {
+  els.connectApiBtn.addEventListener("click", () => {
+    connectApiBase().catch((error) => setStatus(error.message, true));
+  });
+}
+if (els.clearApiBtn) {
+  els.clearApiBtn.addEventListener("click", () => {
+    clearApiBase().catch((error) => setStatus(error.message, true));
+  });
+}
+if (els.apiBaseUrl) {
+  els.apiBaseUrl.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      connectApiBase().catch((error) => setStatus(error.message, true));
+    }
+  });
+}
 els.company.addEventListener("change", applyFiltersWithStatus);
 els.tag.addEventListener("change", applyFiltersWithStatus);
 els.limit.addEventListener("change", applyFiltersWithStatus);

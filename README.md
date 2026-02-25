@@ -96,6 +96,35 @@ curl -s -X POST "http://127.0.0.1:8080/api/scheduler/start" \
   -d '{"interval_minutes":360,"mode":"incremental","window":"6m","incremental_partition":"company"}'
 ```
 
+### 5) Deploy backend (Render or Railway free tier)
+
+This repo includes platform configs:
+
+- `render.yaml`
+- `railway.json`
+- `Procfile`
+
+#### Render
+
+1. Create a new **Web Service** from this GitHub repo.
+2. Render auto-detects `render.yaml`.
+3. Deploy.
+4. Copy your backend URL (example: `https://upskill-interview-backend.onrender.com`).
+
+#### Railway
+
+1. Create a new Railway project from this GitHub repo.
+2. Railway uses `railway.json`/`Procfile` start command.
+3. Deploy and copy public URL.
+
+#### Connect GitHub Pages UI to hosted backend
+
+On your Pages site (`https://praveenmanikanth1508.github.io/upskill/`):
+
+1. In **Backend API Connection**, paste backend URL.
+2. Click **Connect API**.
+3. UI switches from static fallback to live API mode.
+
 ---
 
 ## Project structure
@@ -115,6 +144,9 @@ web/
   index.html                   # UI shell
   app.js                       # UI behavior
   styles.css                   # UI styling
+render.yaml                    # Render deployment config
+railway.json                   # Railway deployment config
+Procfile                       # Procfile start command
 ```
 
 ---

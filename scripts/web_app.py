@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -68,6 +69,18 @@ class RuntimeConfig:
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def env_port(default: int = 8080) -> int:
+    raw = os.getenv("PORT", str(default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def env_host(default: str = "127.0.0.1") -> str:
+    return os.getenv("HOST", default).strip() or default
 
 
 def parse_positive_int(raw: Any, fallback: int, minimum: int, maximum: int) -> int:
@@ -1032,8 +1045,8 @@ class InterviewHandler(BaseHTTPRequestHandler):
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run web UI backend for interview prep hub.")
-    parser.add_argument("--host", default="127.0.0.1", help="Host to bind server.")
-    parser.add_argument("--port", type=int, default=8080, help="Port to bind server.")
+    parser.add_argument("--host", default=env_host(), help="Host to bind server.")
+    parser.add_argument("--port", type=int, default=env_port(), help="Port to bind server.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="Path to sources config.")
     parser.add_argument("--bank", default=str(DEFAULT_BANK), help="Path to generated interview bank JSON.")
     parser.add_argument("--db", default=str(DEFAULT_DB), help="Path to SQLite database file.")

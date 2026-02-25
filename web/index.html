@@ -18,6 +18,25 @@
       </header>
 
       <section class="panel">
+        <h2>Backend API Connection</h2>
+        <div class="grid two">
+          <label>
+            API Base URL (optional)
+            <input id="api-base-url" type="text" placeholder="https://your-backend.onrender.com" />
+          </label>
+          <label>
+            Connection Status
+            <input id="api-connection-status" type="text" readonly value="detecting..." />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="connect-api-btn">Connect API</button>
+          <button id="clear-api-btn" class="ghost">Use Default / Static</button>
+        </div>
+        <p class="subtle">For GitHub Pages, set this to your Render/Railway backend URL.</p>
+      </section>
+
+      <section class="panel">
         <h2>Run Backend Load</h2>
         <div class="grid three">
           <label>
