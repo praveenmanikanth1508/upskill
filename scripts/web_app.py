@@ -11,10 +11,15 @@ Features:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
+import os
 import sqlite3
 import subprocess
 import sys
+import threading
+import time
+import uuid
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -31,6 +36,9 @@ DEFAULT_BANK = ROOT_DIR / "knowledge_bank/interview_bank.json"
 DEFAULT_DB = ROOT_DIR / "knowledge_bank/interview_bank.db"
 DEFAULT_UI_DIR = ROOT_DIR / "web"
 BUILD_SCRIPT = ROOT_DIR / "scripts/build_knowledge_bank.py"
+DEFAULT_SCHEDULE_MODE = "incremental"
+DEFAULT_SCHEDULE_WINDOW = "6m"
+DEFAULT_SCHEDULE_PARTITION = "company"
 
 MAX_LIMIT = 200
 DEFAULT_LIMIT = 25
@@ -63,12 +71,218 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def env_port(default: int = 8080) -> int:
+    raw = os.getenv("PORT", str(default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def env_host(default: str = "127.0.0.1") -> str:
+    return os.getenv("HOST", default).strip() or default
+
+
 def parse_positive_int(raw: Any, fallback: int, minimum: int, maximum: int) -> int:
     try:
         value = int(raw)
     except (TypeError, ValueError):
         return fallback
     return max(minimum, min(maximum, value))
+
+
+class LoadExecutionError(RuntimeError):
+    def __init__(self, message: str, load_result: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.load_result = load_result
+
+
+def normalize_load_request(body: dict[str, Any]) -> dict[str, Any]:
+    mode = str(body.get("mode", "incremental")).strip().lower()
+    if mode not in {"full", "incremental"}:
+        raise ValueError("mode must be 'full' or 'incremental'")
+
+    window = str(body.get("window", "2y")).strip().lower() or "2y"
+    incremental_partition = str(body.get("incremental_partition", "company")).strip().lower() or "company"
+    if incremental_partition not in {"global", "company"}:
+        raise ValueError("incremental_partition must be 'global' or 'company'")
+
+    max_items_per_source = parse_positive_int(
+        body.get("max_items_per_source", 50),
+        fallback=50,
+        minimum=1,
+        maximum=500,
+    )
+    max_questions_per_source = parse_positive_int(
+        body.get("max_questions_per_source", 60),
+        fallback=60,
+        minimum=1,
+        maximum=500,
+    )
+    timeout = parse_positive_int(body.get("timeout", 20), fallback=20, minimum=5, maximum=120)
+
+    return {
+        "mode": mode,
+        "window": window,
+        "incremental_partition": incremental_partition,
+        "max_items_per_source": max_items_per_source,
+        "max_questions_per_source": max_questions_per_source,
+        "timeout": timeout,
+    }
+
+
+class JobStore:
+    """In-memory job store for async load runs."""
+
+    def __init__(self, max_jobs: int = 200) -> None:
+        self._lock = threading.Lock()
+        self._jobs: dict[str, dict[str, Any]] = {}
+        self._order: list[str] = []
+        self._max_jobs = max_jobs
+
+    def _trim_locked(self) -> None:
+        while len(self._order) > self._max_jobs:
+            oldest = self._order.pop(0)
+            self._jobs.pop(oldest, None)
+
+    def create(self, load_request: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            job_id = uuid.uuid4().hex[:12]
+            payload = {
+                "id": job_id,
+                "status": "queued",
+                "created_at": utc_now_iso(),
+                "started_at": None,
+                "finished_at": None,
+                "error": None,
+                "request": copy.deepcopy(load_request),
+                "load_result": None,
+                "sync_result": None,
+                "stats": None,
+            }
+            self._jobs[job_id] = payload
+            self._order.append(job_id)
+            self._trim_locked()
+            return copy.deepcopy(payload)
+
+    def update(self, job_id: str, **fields: Any) -> dict[str, Any] | None:
+        with self._lock:
+            current = self._jobs.get(job_id)
+            if current is None:
+                return None
+            current.update(fields)
+            return copy.deepcopy(current)
+
+    def get(self, job_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            current = self._jobs.get(job_id)
+            return copy.deepcopy(current) if current else None
+
+    def list(self, limit: int, offset: int) -> dict[str, Any]:
+        with self._lock:
+            total = len(self._order)
+            ordered_ids = list(reversed(self._order))
+            selected_ids = ordered_ids[offset : offset + limit]
+            jobs = [copy.deepcopy(self._jobs[job_id]) for job_id in selected_ids if job_id in self._jobs]
+        return {"jobs": jobs, "total": total, "limit": limit, "offset": offset}
+
+
+class LoadScheduler:
+    """Periodic loader scheduler for incremental/full refresh."""
+
+    def __init__(self, run_callback: Any) -> None:
+        self._run_callback = run_callback
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._stop_event: threading.Event | None = None
+        self._state: dict[str, Any] = {
+            "enabled": False,
+            "interval_minutes": None,
+            "request": None,
+            "last_started_at": None,
+            "last_finished_at": None,
+            "last_status": None,
+            "last_error": None,
+            "next_run_at": None,
+        }
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return copy.deepcopy(self._state)
+
+    def start(self, interval_minutes: int, load_request: dict[str, Any]) -> dict[str, Any]:
+        interval = max(1, interval_minutes)
+        with self._lock:
+            if self._state["enabled"]:
+                raise RuntimeError("Scheduler is already running.")
+            stop_event = threading.Event()
+            self._stop_event = stop_event
+            self._state.update(
+                {
+                    "enabled": True,
+                    "interval_minutes": interval,
+                    "request": copy.deepcopy(load_request),
+                    "last_started_at": None,
+                    "last_finished_at": None,
+                    "last_status": None,
+                    "last_error": None,
+                    "next_run_at": utc_now_iso(),
+                }
+            )
+            self._thread = threading.Thread(target=self._loop, name="load-scheduler", daemon=True)
+            self._thread.start()
+            return copy.deepcopy(self._state)
+
+    def stop(self) -> dict[str, Any]:
+        thread: threading.Thread | None
+        stop_event: threading.Event | None
+        with self._lock:
+            if not self._state["enabled"]:
+                return copy.deepcopy(self._state)
+            thread = self._thread
+            stop_event = self._stop_event
+            self._state["enabled"] = False
+            self._state["next_run_at"] = None
+            self._thread = None
+            self._stop_event = None
+
+        if stop_event is not None:
+            stop_event.set()
+        if thread is not None:
+            thread.join(timeout=2)
+        return self.snapshot()
+
+    def _loop(self) -> None:
+        while True:
+            with self._lock:
+                enabled = bool(self._state.get("enabled"))
+                interval_minutes = int(self._state.get("interval_minutes") or 1)
+                load_request = copy.deepcopy(self._state.get("request") or {})
+                stop_event = self._stop_event
+            if not enabled or stop_event is None or stop_event.is_set():
+                return
+
+            with self._lock:
+                self._state["last_started_at"] = utc_now_iso()
+                self._state["last_status"] = "running"
+                self._state["last_error"] = None
+
+            try:
+                self._run_callback(load_request)
+                with self._lock:
+                    self._state["last_status"] = "succeeded"
+            except Exception as exc:  # pragma: no cover - defensive runtime path
+                with self._lock:
+                    self._state["last_status"] = "failed"
+                    self._state["last_error"] = str(exc)
+            finally:
+                with self._lock:
+                    self._state["last_finished_at"] = utc_now_iso()
+                    next_run_ts = time.time() + interval_minutes * 60
+                    self._state["next_run_at"] = datetime.fromtimestamp(next_run_ts, timezone.utc).isoformat()
+
+            if stop_event.wait(interval_minutes * 60):
+                return
 
 
 def open_connection(db_path: Path) -> sqlite3.Connection:
@@ -397,6 +611,28 @@ def compute_stats(db_path: Path) -> dict[str, Any]:
     return payload
 
 
+def list_load_runs(db_path: Path, limit: int, offset: int) -> dict[str, Any]:
+    with open_connection(db_path) as conn:
+        ensure_schema(conn)
+        total = conn.execute("SELECT COUNT(*) FROM load_runs").fetchone()[0]
+        rows = conn.execute(
+            """
+            SELECT id, run_at, mode, window, incremental_partition, item_count, inserted_count, updated_count, output_path
+            FROM load_runs
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        ).fetchall()
+
+    return {
+        "runs": [dict(row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
 def run_loader(
     config_path: Path,
     output_path: Path,
@@ -442,6 +678,37 @@ def run_loader(
     }
 
 
+def execute_load_and_sync(runtime_config: RuntimeConfig, load_request: dict[str, Any]) -> dict[str, Any]:
+    load_result = run_loader(
+        config_path=runtime_config.config_path,
+        output_path=runtime_config.bank_path,
+        mode=load_request["mode"],
+        window=load_request["window"],
+        incremental_partition=load_request["incremental_partition"],
+        max_items_per_source=load_request["max_items_per_source"],
+        max_questions_per_source=load_request["max_questions_per_source"],
+        timeout=load_request["timeout"],
+    )
+
+    if load_result["return_code"] != 0:
+        raise LoadExecutionError("Build loader failed.", load_result=load_result)
+
+    sync_result = sync_bank_to_db(
+        bank_path=runtime_config.bank_path,
+        db_path=runtime_config.db_path,
+        mode=load_request["mode"],
+        window=load_request["window"],
+        incremental_partition=load_request["incremental_partition"],
+    )
+    stats = compute_stats(runtime_config.db_path)
+    return {
+        "message": "Load completed and DB synced successfully.",
+        "load_result": load_result,
+        "sync_result": sync_result,
+        "stats": stats,
+    }
+
+
 class InterviewServer(ThreadingHTTPServer):
     def __init__(
         self,
@@ -451,6 +718,55 @@ class InterviewServer(ThreadingHTTPServer):
     ) -> None:
         super().__init__(server_address, request_handler_class)
         self.runtime_config = runtime_config
+        self.load_lock = threading.Lock()
+        self.job_store = JobStore(max_jobs=250)
+        self.scheduler = LoadScheduler(self._run_scheduled_load_once)
+
+    def execute_load(self, load_request: dict[str, Any]) -> dict[str, Any]:
+        with self.load_lock:
+            return execute_load_and_sync(self.runtime_config, load_request)
+
+    def start_async_job(self, load_request: dict[str, Any]) -> dict[str, Any]:
+        job = self.job_store.create(load_request)
+        thread = threading.Thread(
+            target=self._async_job_runner,
+            args=(job["id"], load_request),
+            name=f"load-job-{job['id']}",
+            daemon=True,
+        )
+        thread.start()
+        return job
+
+    def _async_job_runner(self, job_id: str, load_request: dict[str, Any]) -> None:
+        self.job_store.update(job_id, status="running", started_at=utc_now_iso(), error=None)
+        try:
+            result = self.execute_load(load_request)
+            self.job_store.update(
+                job_id,
+                status="succeeded",
+                finished_at=utc_now_iso(),
+                load_result=result["load_result"],
+                sync_result=result["sync_result"],
+                stats=result["stats"],
+            )
+        except LoadExecutionError as exc:
+            self.job_store.update(
+                job_id,
+                status="failed",
+                finished_at=utc_now_iso(),
+                error=str(exc),
+                load_result=exc.load_result,
+            )
+        except Exception as exc:  # pragma: no cover - defensive runtime path
+            self.job_store.update(
+                job_id,
+                status="failed",
+                finished_at=utc_now_iso(),
+                error=str(exc),
+            )
+
+    def _run_scheduled_load_once(self, load_request: dict[str, Any]) -> None:
+        self.execute_load(load_request)
 
 
 class InterviewHandler(BaseHTTPRequestHandler):
@@ -458,6 +774,16 @@ class InterviewHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
         sys.stdout.write("%s - - [%s] %s\n" % (self.address_string(), self.log_date_time_string(), format % args))
+
+    def end_headers(self) -> None:
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        super().end_headers()
+
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.end_headers()
 
     @property
     def cfg(self) -> RuntimeConfig:
@@ -534,6 +860,25 @@ class InterviewHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if path == "/api/jobs":
+            limit = parse_positive_int(query.get("limit", [25])[0], 25, 1, 200)
+            offset = parse_positive_int(query.get("offset", [0])[0], 0, 0, 1_000_000)
+            payload = self.server.job_store.list(limit=limit, offset=offset)
+            self._send_json(HTTPStatus.OK, payload)
+            return
+
+        if path.startswith("/api/jobs/"):
+            job_id = path.removeprefix("/api/jobs/").strip()
+            if not job_id:
+                self._send_error(HTTPStatus.BAD_REQUEST, "Missing job id.")
+                return
+            payload = self.server.job_store.get(job_id)
+            if payload is None:
+                self._send_error(HTTPStatus.NOT_FOUND, "Job not found.")
+                return
+            self._send_json(HTTPStatus.OK, payload)
+            return
+
         if path == "/api/items":
             company = (query.get("company", [None])[0] or None)
             tags = [value for value in query.get("tag", []) if value.strip()]
@@ -566,6 +911,17 @@ class InterviewHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, payload)
             return
 
+        if path == "/api/runs":
+            limit = parse_positive_int(query.get("limit", [25])[0], 25, 1, 200)
+            offset = parse_positive_int(query.get("offset", [0])[0], 0, 0, 1_000_000)
+            payload = list_load_runs(self.cfg.db_path, limit=limit, offset=offset)
+            self._send_json(HTTPStatus.OK, payload)
+            return
+
+        if path == "/api/scheduler":
+            self._send_json(HTTPStatus.OK, self.server.scheduler.snapshot())
+            return
+
         self._send_error(HTTPStatus.NOT_FOUND, "Unknown endpoint")
 
     def _handle_api_post(self, parsed: Any) -> None:
@@ -595,80 +951,91 @@ class InterviewHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/load":
-            mode = str(body.get("mode", "incremental")).strip().lower()
-            if mode not in {"full", "incremental"}:
-                self._send_error(HTTPStatus.BAD_REQUEST, "mode must be 'full' or 'incremental'")
-                return
-
-            window = str(body.get("window", "2y")).strip().lower() or "2y"
-            incremental_partition = str(body.get("incremental_partition", "company")).strip().lower() or "company"
-            if incremental_partition not in {"global", "company"}:
-                self._send_error(
-                    HTTPStatus.BAD_REQUEST,
-                    "incremental_partition must be 'global' or 'company'",
-                )
-                return
-
-            max_items_per_source = parse_positive_int(
-                body.get("max_items_per_source", 50),
-                fallback=50,
-                minimum=1,
-                maximum=500,
-            )
-            max_questions_per_source = parse_positive_int(
-                body.get("max_questions_per_source", 60),
-                fallback=60,
-                minimum=1,
-                maximum=500,
-            )
-            timeout = parse_positive_int(body.get("timeout", 20), fallback=20, minimum=5, maximum=120)
-
-            load_result = run_loader(
-                config_path=self.cfg.config_path,
-                output_path=self.cfg.bank_path,
-                mode=mode,
-                window=window,
-                incremental_partition=incremental_partition,
-                max_items_per_source=max_items_per_source,
-                max_questions_per_source=max_questions_per_source,
-                timeout=timeout,
-            )
-
-            if load_result["return_code"] != 0:
-                self._send_json(
-                    HTTPStatus.INTERNAL_SERVER_ERROR,
-                    {
-                        "error": "Build loader failed.",
-                        "load_result": load_result,
-                    },
-                )
+            try:
+                load_request = normalize_load_request(body)
+            except ValueError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
                 return
 
             try:
-                sync_result = sync_bank_to_db(
-                    bank_path=self.cfg.bank_path,
-                    db_path=self.cfg.db_path,
-                    mode=mode,
-                    window=window,
-                    incremental_partition=incremental_partition,
+                payload = self.server.execute_load(load_request)
+            except LoadExecutionError as exc:
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {
+                        "error": str(exc),
+                        "load_result": exc.load_result,
+                    },
                 )
+                return
             except (FileNotFoundError, ValueError, OSError, json.JSONDecodeError) as exc:
                 self._send_json(
                     HTTPStatus.INTERNAL_SERVER_ERROR,
                     {
                         "error": f"Loader succeeded but DB sync failed: {exc}",
-                        "load_result": load_result,
                     },
                 )
+                return
+
+            self._send_json(HTTPStatus.OK, payload)
+            return
+
+        if path == "/api/load/async":
+            try:
+                load_request = normalize_load_request(body)
+            except ValueError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+
+            job = self.server.start_async_job(load_request)
+            self._send_json(
+                HTTPStatus.ACCEPTED,
+                {
+                    "message": "Async load job accepted.",
+                    "job_id": job["id"],
+                    "job": job,
+                },
+            )
+            return
+
+        if path == "/api/scheduler/start":
+            interval_minutes = parse_positive_int(
+                body.get("interval_minutes", 360),
+                fallback=360,
+                minimum=1,
+                maximum=10_080,
+            )
+            scheduler_body = {
+                "mode": body.get("mode", DEFAULT_SCHEDULE_MODE),
+                "window": body.get("window", DEFAULT_SCHEDULE_WINDOW),
+                "incremental_partition": body.get("incremental_partition", DEFAULT_SCHEDULE_PARTITION),
+                "max_items_per_source": body.get("max_items_per_source", 50),
+                "max_questions_per_source": body.get("max_questions_per_source", 60),
+                "timeout": body.get("timeout", 20),
+            }
+            try:
+                load_request = normalize_load_request(scheduler_body)
+                snapshot = self.server.scheduler.start(interval_minutes=interval_minutes, load_request=load_request)
+            except (ValueError, RuntimeError) as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
                 return
 
             self._send_json(
                 HTTPStatus.OK,
                 {
-                    "message": "Load completed and DB synced successfully.",
-                    "load_result": load_result,
-                    "sync_result": sync_result,
-                    "stats": compute_stats(self.cfg.db_path),
+                    "message": "Scheduler started.",
+                    "scheduler": snapshot,
+                },
+            )
+            return
+
+        if path == "/api/scheduler/stop":
+            snapshot = self.server.scheduler.stop()
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "message": "Scheduler stopped.",
+                    "scheduler": snapshot,
                 },
             )
             return
@@ -678,8 +1045,8 @@ class InterviewHandler(BaseHTTPRequestHandler):
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run web UI backend for interview prep hub.")
-    parser.add_argument("--host", default="127.0.0.1", help="Host to bind server.")
-    parser.add_argument("--port", type=int, default=8080, help="Port to bind server.")
+    parser.add_argument("--host", default=env_host(), help="Host to bind server.")
+    parser.add_argument("--port", type=int, default=env_port(), help="Port to bind server.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="Path to sources config.")
     parser.add_argument("--bank", default=str(DEFAULT_BANK), help="Path to generated interview bank JSON.")
     parser.add_argument("--db", default=str(DEFAULT_DB), help="Path to SQLite database file.")
@@ -688,6 +1055,29 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--bootstrap-sync",
         action="store_true",
         help="Sync existing bank JSON into SQLite before server starts.",
+    )
+    parser.add_argument(
+        "--schedule-interval-minutes",
+        type=int,
+        default=0,
+        help="If > 0, start periodic loader scheduler with this interval.",
+    )
+    parser.add_argument(
+        "--schedule-mode",
+        choices=["full", "incremental"],
+        default=DEFAULT_SCHEDULE_MODE,
+        help="Mode used for auto scheduler runs.",
+    )
+    parser.add_argument(
+        "--schedule-window",
+        default=DEFAULT_SCHEDULE_WINDOW,
+        help="Window value used for auto scheduler runs (e.g., 1w, 1m, 6m, 2y).",
+    )
+    parser.add_argument(
+        "--schedule-partition",
+        choices=["global", "company"],
+        default=DEFAULT_SCHEDULE_PARTITION,
+        help="Incremental partition for auto scheduler runs.",
     )
     return parser.parse_args(argv)
 
@@ -725,6 +1115,26 @@ def main(argv: list[str]) -> int:
             return 2
 
     server = InterviewServer((args.host, args.port), InterviewHandler, runtime_config=runtime_config)
+    if args.schedule_interval_minutes > 0:
+        scheduler_body = {
+            "mode": args.schedule_mode,
+            "window": args.schedule_window,
+            "incremental_partition": args.schedule_partition,
+        }
+        try:
+            scheduler_request = normalize_load_request(scheduler_body)
+            server.scheduler.start(
+                interval_minutes=args.schedule_interval_minutes,
+                load_request=scheduler_request,
+            )
+            print(
+                "Scheduler started: "
+                f"every {args.schedule_interval_minutes} minute(s), mode={args.schedule_mode}, window={args.schedule_window}, partition={args.schedule_partition}"
+            )
+        except (ValueError, RuntimeError) as exc:
+            print(f"Failed to start scheduler: {exc}", file=sys.stderr)
+            return 2
+
     print(f"Serving Interview Prep UI on http://{args.host}:{args.port}")
     print(f"DB: {runtime_config.db_path}")
     print("Press Ctrl+C to stop.")
@@ -733,6 +1143,7 @@ def main(argv: list[str]) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        server.scheduler.stop()
         server.server_close()
     return 0
 

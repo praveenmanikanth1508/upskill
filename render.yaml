@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: upskill-interview-backend
+    env: python
+    plan: free
+    autoDeploy: true
+    buildCommand: ""
+    startCommand: python3 scripts/web_app.py --host 0.0.0.0 --port $PORT --bootstrap-sync
