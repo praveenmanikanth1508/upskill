@@ -10,13 +10,13 @@
       "base_tags": ["interview", "data-engineering"]
     },
     {
-      "name": "Reddit r/dataengineering interview RSS",
+      "name": "Medium tag feed - data engineering interview",
       "type": "rss",
-      "url": "https://www.reddit.com/r/dataengineering/search.rss?q=interview&restrict_sr=1&sort=new",
+      "url": "https://medium.com/feed/tag/data-engineering-interview",
       "company": "multiple",
       "region": "usa",
       "role_level": "mid-level",
-      "base_tags": ["interview", "community"]
+      "base_tags": ["interview", "blog"]
     },
     {
       "name": "Interview prep article page",
