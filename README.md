@@ -25,6 +25,24 @@ This project helps you:
 
 ## Quick start
 
+### 0) Run Web UI + Backend + SQLite (new)
+
+```bash
+python3 scripts/web_app.py --host 127.0.0.1 --port 8080 --bootstrap-sync
+```
+
+Then open:
+
+- `http://127.0.0.1:8080`
+
+What this gives you:
+
+- Backend API that runs loader logic (`/api/load`)
+- SQLite database for fast filtering/search (`knowledge_bank/interview_bank.db`)
+- Browser UI to run loads and query by company/tag/keyword
+
+---
+
 ### 1) First load (latest 2 years by default)
 
 ```bash
@@ -85,6 +103,11 @@ knowledge_bank/
 scripts/
   build_knowledge_bank.py      # Ingestion + extraction pipeline
   query_knowledge_bank.py      # CLI search on generated bank
+  web_app.py                   # Backend API + SQLite integration + static server
+web/
+  index.html                   # UI
+  app.js                       # UI logic (load/filter/render)
+  styles.css                   # UI styles
 ```
 
 ---
@@ -131,6 +154,20 @@ Example daily cron (UTC 06:00):
 - Respect website terms, robots.txt, and rate limits.
 - Keep original source URLs in your bank.
 - Treat generated answer hints as a starting point, not final truth.
+
+---
+
+## Database choice (free-first, scale later)
+
+Recommended order:
+
+1. **SQLite (current default)**  
+   - Zero cost, no setup, single file DB, perfect for local testing.
+2. **Postgres free tier when traffic grows**  
+   - Move to **Neon** or **Supabase** free tier.
+   - Keep the same schema concepts (`interview_items`, `load_runs`) and migrate API queries.
+
+This gives you fastest iteration now, with a clean path to scale.
 
 ---
 
