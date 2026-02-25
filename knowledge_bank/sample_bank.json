@@ -1,6 +1,9 @@
 {
   "metadata": {
     "generated_at": "2026-02-25T00:00:00+00:00",
+    "load_mode": "full",
+    "cutoff_utc": "2024-02-26T00:00:00+00:00",
+    "cutoff_reason": "days_back_window",
     "source_count": 2,
     "item_count": 2,
     "companies": {

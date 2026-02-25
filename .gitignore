@@ -3,3 +3,5 @@ __pycache__/
 
 # Generated output from local runs
 knowledge_bank/interview_bank.json
+knowledge_bank/.build_state.json
+knowledge_bank/build.log

@@ -391,6 +391,62 @@ def load_config(path: Path) -> list[dict[str, Any]]:
     return sources
 
 
+def load_existing_items(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    items = payload.get("items", [])
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict) and "id" in item]
+
+
+def load_state(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            state = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(state, dict):
+        return {}
+    return state
+
+
+def write_state(path: Path, state: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(state, handle, indent=2, ensure_ascii=True)
+        handle.write("\n")
+
+
+def resolve_cutoff(
+    now_utc: datetime,
+    days_back: int,
+    incremental: bool,
+    state: dict[str, Any],
+) -> tuple[datetime, str]:
+    default_cutoff = now_utc - timedelta(days=days_back)
+    if not incremental:
+        return default_cutoff, "days_back_window"
+
+    last_run_raw = state.get("last_successful_run")
+    last_run = parse_dt(str(last_run_raw)) if last_run_raw else None
+    if not last_run:
+        return default_cutoff, "incremental_no_state_fallback"
+
+    cutoff = max(default_cutoff, last_run)
+    if cutoff == last_run:
+        return cutoff, "incremental_since_last_successful_run"
+    return cutoff, "incremental_capped_by_days_back"
+
+
 def deduplicate(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     unique: dict[str, dict[str, Any]] = {}
     for item in items:
@@ -405,12 +461,22 @@ def write_output(path: Path, payload: dict[str, Any]) -> None:
         handle.write("\n")
 
 
-def metadata_for(items: list[dict[str, Any]], source_count: int, now_utc: datetime) -> dict[str, Any]:
+def metadata_for(
+    items: list[dict[str, Any]],
+    source_count: int,
+    now_utc: datetime,
+    load_mode: str,
+    cutoff: datetime,
+    cutoff_reason: str,
+) -> dict[str, Any]:
     company_counts = Counter(item.get("company", "unknown") for item in items)
     tag_counts = Counter(tag for item in items for tag in item.get("tags", []))
 
     return {
         "generated_at": now_utc.isoformat(),
+        "load_mode": load_mode,
+        "cutoff_utc": cutoff.isoformat(),
+        "cutoff_reason": cutoff_reason,
         "source_count": source_count,
         "item_count": len(items),
         "companies": dict(company_counts.most_common()),
@@ -429,8 +495,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--days-back",
         type=int,
-        default=3650,
-        help="Only keep items newer than this many days when publish date exists.",
+        default=730,
+        help="Look-back window in days (default 730 = 2 years).",
+    )
+    parser.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Incremental mode: fetch items since last successful run (state-based).",
+    )
+    parser.add_argument(
+        "--state-file",
+        default="knowledge_bank/.build_state.json",
+        help="Path to incremental state file.",
+    )
+    parser.add_argument(
+        "--no-state-update",
+        action="store_true",
+        help="Do not write state file after successful run.",
     )
     parser.add_argument(
         "--max-items-per-source",
@@ -459,6 +540,7 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     config_path = Path(args.config)
     output_path = Path(args.output)
+    state_path = Path(args.state_file)
 
     if not config_path.exists():
         print(f"Config file not found: {config_path}", file=sys.stderr)
@@ -471,8 +553,21 @@ def main(argv: list[str]) -> int:
         return 2
 
     now_utc = datetime.now(timezone.utc)
-    cutoff = now_utc - timedelta(days=args.days_back)
+    state = load_state(state_path) if args.incremental else {}
+    cutoff, cutoff_reason = resolve_cutoff(
+        now_utc=now_utc,
+        days_back=args.days_back,
+        incremental=args.incremental,
+        state=state,
+    )
+    load_mode = "incremental" if args.incremental else "full"
     all_items: list[dict[str, Any]] = []
+
+    if args.verbose:
+        print(
+            f"[info] mode={load_mode} cutoff={cutoff.isoformat()} reason={cutoff_reason}",
+            file=sys.stderr,
+        )
 
     for source in sources:
         source_name = source.get("name", source.get("url", "unknown-source"))
@@ -511,17 +606,48 @@ def main(argv: list[str]) -> int:
         except (HTTPError, URLError, TimeoutError, ValueError) as exc:
             print(f"[warn] {source_name}: failed to fetch/parse ({exc})", file=sys.stderr)
 
-    deduped_items = deduplicate(all_items)
+    items_for_dedupe = list(all_items)
+    if args.incremental:
+        existing_items = load_existing_items(output_path)
+        if args.verbose:
+            print(
+                f"[info] merged {len(existing_items)} existing items from {output_path}",
+                file=sys.stderr,
+            )
+        items_for_dedupe = existing_items + all_items
+
+    deduped_items = deduplicate(items_for_dedupe)
     deduped_items.sort(key=lambda item: (item.get("company", ""), item.get("question", "")))
 
     payload = {
-        "metadata": metadata_for(deduped_items, len(sources), now_utc),
+        "metadata": metadata_for(
+            deduped_items,
+            len(sources),
+            now_utc,
+            load_mode=load_mode,
+            cutoff=cutoff,
+            cutoff_reason=cutoff_reason,
+        ),
         "items": deduped_items,
     }
     write_output(output_path, payload)
 
+    if not args.no_state_update:
+        write_state(
+            state_path,
+            {
+                "last_successful_run": now_utc.isoformat(),
+                "last_run_mode": load_mode,
+                "last_output_path": str(output_path),
+                "last_item_count": len(deduped_items),
+                "last_sources_count": len(sources),
+            },
+        )
+        if args.verbose:
+            print(f"[info] updated state file: {state_path}", file=sys.stderr)
+
     print(
-        f"Generated knowledge bank at {output_path} with {len(deduped_items)} items from {len(sources)} sources."
+        f"Generated knowledge bank at {output_path} with {len(deduped_items)} items from {len(sources)} sources ({load_mode} mode)."
     )
     return 0
 

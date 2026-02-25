@@ -25,17 +25,34 @@ This project helps you:
 
 ## Quick start
 
-### 1) Build the knowledge bank
+### 1) First load (latest 2 years by default)
 
 ```bash
 python3 scripts/build_knowledge_bank.py \
   --config config/sources.json \
   --output knowledge_bank/interview_bank.json \
-  --days-back 3650 \
+  --days-back 730 \
   --max-items-per-source 50
 ```
 
-### 2) Query by company/topic/keyword
+### 2) Incremental load (new items since last run)
+
+```bash
+python3 scripts/build_knowledge_bank.py \
+  --config config/sources.json \
+  --output knowledge_bank/interview_bank.json \
+  --incremental \
+  --days-back 730 \
+  --max-items-per-source 50
+```
+
+Notes:
+
+- `--incremental` uses `knowledge_bank/.build_state.json` to remember the last successful run.
+- In incremental mode, old items are merged with newly fetched items, then deduplicated.
+- `--days-back` still acts as a safety cap.
+
+### 3) Query by company/topic/keyword
 
 ```bash
 python3 scripts/query_knowledge_bank.py \
@@ -81,6 +98,21 @@ Each source can include:
 - `region` (for your case use `"usa"`)
 - `role_level` (for your case use `"mid-level"`)
 - `base_tags` (for example: `["sql", "spark", "python"]`)
+
+---
+
+## Scheduling options
+
+The loader supports both styles:
+
+- **On-demand**: run the command manually whenever you want.
+- **Timed/Scheduled**: run incremental command via cron (or any scheduler).
+
+Example daily cron (UTC 06:00):
+
+```bash
+0 6 * * * cd /path/to/repo && python3 scripts/build_knowledge_bank.py --config config/sources.json --output knowledge_bank/interview_bank.json --incremental --days-back 730 >> knowledge_bank/build.log 2>&1
+```
 
 ---
 
